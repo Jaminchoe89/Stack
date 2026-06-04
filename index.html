@@ -254,6 +254,9 @@ let gameObjs = []; // meshes we add per game — cleared on reset
 let camY     = 16;
 let camLookY = 0;
 
+// Death camera animation state
+let deathCam = null; // { sx,sy,sz,sly,towerTop,t }
+
 // ── Audio ─────────────────────────────────────────────────────────────────────
 // C major pentatonic — ascends as the tower grows
 const PENTATONIC = [
@@ -356,6 +359,7 @@ function startGame() {
   state = 'playing';
   score = 0;
   camY = 16; camLookY = 0;
+  deathCam = null;
 
   document.getElementById('start-screen').classList.add('hidden');
   document.getElementById('score-wrap').style.display   = 'block';
@@ -373,7 +377,6 @@ function gameOver() {
   state = 'dead';
   if (score > best) best = score;
 
-  // drop the mover as debris
   if (mover) {
     falling.push(makeDebrisEntry(mover.mesh));
     mover = null;
@@ -384,9 +387,11 @@ function gameOver() {
   document.getElementById('final-score-value').textContent = score;
   document.getElementById('best-value').textContent        = best;
 
+  // Start cinematic tower-reveal camera, then show game over screen
+  startDeathCamera();
   setTimeout(() => {
     document.getElementById('gameover-screen').classList.remove('hidden');
-  }, 700);
+  }, 4200);
 }
 
 function onAction() {
@@ -543,6 +548,64 @@ function stepCamera() {
   camera.lookAt(0, camLookY, 0);
 }
 
+// ── Death camera ──────────────────────────────────────────────────────────────
+function startDeathCamera() {
+  const towerTop = stack.length * BLOCK_H;
+  deathCam = {
+    sx: camera.position.x,
+    sy: camera.position.y,
+    sz: camera.position.z,
+    sly: camLookY,
+    towerTop,
+    t: 0,
+  };
+}
+
+function stepDeathCamera(dt) {
+  if (!deathCam) return;
+  deathCam.t += dt;
+  const { sx, sy, sz, sly, towerTop } = deathCam;
+  const t = deathCam.t;
+
+  const towerMid  = towerTop * 0.48;
+  const revealDist = Math.max(24, towerTop * 1.5 + 14);
+
+  // 0–0.45s: hold — let the death debris settle visually
+  if (t < 0.45) return;
+
+  // 0.45–3.4s: smooth pull-back + orbit to reveal full tower height
+  const p2dur = 2.95;
+  const p2t   = Math.min((t - 0.45) / p2dur, 1);
+  const ease  = easeInOutCubic(p2t);
+
+  const startAngle = Math.atan2(sx, sz);
+  const endAngle   = startAngle + Math.PI * 0.75; // sweep 135°
+  const angle      = lerp(startAngle, endAngle, ease);
+
+  const tx = Math.sin(angle) * revealDist;
+  const tz = Math.cos(angle) * revealDist;
+  const ty = lerp(sy, towerMid + 5, ease);
+  const ly = lerp(sly, towerMid, ease);
+
+  camera.position.set(lerp(sx, tx, ease), ty, lerp(sz, tz, ease));
+  camera.lookAt(0, ly, 0);
+
+  // 3.4s+: slow continuous orbit at the reveal position
+  if (t > 3.4) {
+    const a = endAngle + (t - 3.4) * 0.2;
+    camera.position.x = Math.sin(a) * revealDist;
+    camera.position.z = Math.cos(a) * revealDist;
+    camera.position.y = towerMid + 5;
+    camera.lookAt(0, towerMid, 0);
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function lerp(a, b, t) { return a + (b - a) * t; }
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
 // ── Loop ──────────────────────────────────────────────────────────────────────
 function animate() {
   requestAnimationFrame(animate);
@@ -562,7 +625,13 @@ function animate() {
   }
 
   stepDebris(dt);
-  stepCamera();
+
+  if (state === 'dead') {
+    stepDeathCamera(dt);
+  } else {
+    stepCamera();
+  }
+
   renderer.render(scene, camera);
 }
 
